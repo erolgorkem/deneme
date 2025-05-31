@@ -6,52 +6,25 @@ from datetime import datetime
 app = Flask(__name__)
 app.secret_key = 'gorkem-bey-ozel-sifre'
 
-# --- Dosya yükleme yolları ---
 SIPARIS_UPLOAD = 'uploads_siparis'
 MALIYET_UPLOAD = 'uploads_maliyet'
 for folder in [SIPARIS_UPLOAD, MALIYET_UPLOAD]:
     if not os.path.exists(folder):
         os.makedirs(folder)
 
-# --- Sipariş kolonları ve sırası ---
 SIPARIS_KOLONLAR = [
-    "Sipariş Statüsü",
-    "Sipariş Tarihi",
-    "Teslim Tarihi",
-    "Sipariş Numarası",
-    "Barkod",
-    "Stok Kodu",
-    "Adet",
-    "Alıcı",
-    "Paket No",
-    "Kargo Firması",
-    "Kargo Kodu",
-    "Ürün Adı",
-    "Birim Fiyatı",
-    "Satış Tutarı",
-    "İndirim Tutarı",
-    "Faturalanacak Tutar",
-    "Komisyon Oranı",
-    "Teslimat Adresi",
-    "İl",
-    "İlçe"
+    "Sipariş Statüsü", "Sipariş Tarihi", "Teslim Tarihi", "Sipariş Numarası", "Barkod",
+    "Stok Kodu", "Adet", "Alıcı", "Paket No", "Kargo Firması", "Kargo Kodu", "Ürün Adı",
+    "Birim Fiyatı", "Satış Tutarı", "İndirim Tutarı", "Faturalanacak Tutar", "Komisyon Oranı",
+    "Teslimat Adresi", "İl", "İlçe"
 ]
-
-# --- Maliyet kolonları ve sırası ---
 MALIYET_KOLONLAR = [
-    "Barkod",
-    "Model Kodu",
-    "Stok Kodu",
-    "Kategori",
-    "Ürün Adı",
-    "Trendyol Satış Fiyatı",
-    "Ürün Maliyeti (KDV Dahil)"
+    "Barkod", "Model Kodu", "Stok Kodu", "Kategori", "Ürün Adı",
+    "Trendyol Satış Fiyatı", "Ürün Maliyeti (KDV Dahil)"
 ]
-
 KULLANICI_ADI = "admin"
 SIFRE = "bilmiyorum"
 
-# --- Global data (hafızada kalıyor, database yok) ---
 siparis_df = None
 maliyet_df = None
 
@@ -113,7 +86,6 @@ def logout():
 def index():
     return redirect(url_for('siparis'))
 
-# --- Sipariş Exceli Yükleme ve Gösterme ---
 @app.route('/siparis', methods=['GET', 'POST'])
 @giris_gerekli
 def siparis():
@@ -126,14 +98,13 @@ def siparis():
             file.save(filepath)
             df = pd.read_excel(filepath)
             try:
-                siparis_df = df[SIPARIS_KOLONLAR]
-                # Tarih kolonlarını otomatik "datetime" objesine çevir, hata olursa None olsun:
+                siparis_df = df[SIPARIS_KOLONLAR].copy()
+                # Tarih kolonlarını datetime'a çevir:
                 for kol in ["Sipariş Tarihi", "Teslim Tarihi"]:
                     if kol in siparis_df.columns:
-                        siparis_df[kol] = pd.to_datetime(siparis_df[kol], errors='coerce')
+                        siparis_df.loc[:, kol] = pd.to_datetime(siparis_df[kol], errors='coerce').dt.strftime('%Y-%m-%d')
             except Exception as e:
                 hata = f"Excel kolonlarında eksik veya hatalı başlık var: {str(e)}"
-    # Tab ve hata bilgisiyle tabloyu göster:
     return render_sablon(
         aktif_tab="siparis",
         tablo_df=siparis_df,
@@ -141,7 +112,6 @@ def siparis():
         yukleme_hatasi=hata
     )
 
-# --- Maliyet Exceli Yükleme ve Gösterme ---
 @app.route('/maliyet', methods=['GET', 'POST'])
 @giris_gerekli
 def maliyet():
@@ -154,7 +124,7 @@ def maliyet():
             file.save(filepath)
             df = pd.read_excel(filepath)
             try:
-                maliyet_df = df[MALIYET_KOLONLAR]
+                maliyet_df = df[MALIYET_KOLONLAR].copy()
             except Exception as e:
                 hata = f"Excel kolonlarında eksik veya hatalı başlık var: {str(e)}"
     return render_sablon(
@@ -164,11 +134,8 @@ def maliyet():
         yukleme_hatasi=hata
     )
 
-# --- HTML Şablon ve Tablo Filtreleme ---
 def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
-    # Kolonlara hangi tip filtre eklenecek? (tarih olanlara tarih filtre aracı, diğerlerine metin)
     tarih_kolonlari = [k for k in kolonlar if "Tarih" in k]
-    # Pandas tablodan HTML üret
     html_table = (
         tablo_df[kolonlar].to_html(
             classes='table table-hover table-bordered align-middle text-center compact-table',
@@ -177,8 +144,6 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
         )
         if tablo_df is not None else ""
     )
-
-    # HTML şablon:
     return render_template_string("""
     <!DOCTYPE html>
     <html>
@@ -205,7 +170,6 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
       </style>
       <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
       <script>
-        // Filtreleme için javascript
         function filtreleTablo() {
           var input = document.getElementById("aramaInput");
           var filtre = input.value.toLowerCase();
@@ -222,7 +186,6 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
             tr[i].style.display = satirGoster ? "" : "none";
           }
         }
-        // Tarih aralığı filtresi
         function tarihAraligiFiltrele(kolonIndex) {
           var tablo = document.getElementById("veriTablosu");
           var baslangic = document.getElementById("tarihBaslangic" + kolonIndex).value;
@@ -243,7 +206,6 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
             }
           }
         }
-        // Flatpickr başlatıcı
         function tarihFiltreAc(kolonIndex) {
           document.getElementById("tarihFiltrePanel" + kolonIndex).style.display = "block";
           flatpickr("#tarihBaslangic" + kolonIndex, {dateFormat: "Y-m-d"});
@@ -275,7 +237,7 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
 
         <form method="post" enctype="multipart/form-data" class="border rounded-4 p-4 shadow bg-white mb-4" style="max-width:500px;">
           <input type="file" name="file" accept=".xls,.xlsx" class="form-control mb-3" required>
-          <button type="submit" class="btn btn-primary btn-lg rounded-pill px-5">{% if aktif_tab == 'siparis' %}Yükle{% else %}Yükle{% endif %}</button>
+          <button type="submit" class="btn btn-primary btn-lg rounded-pill px-5">Yükle</button>
         </form>
 
         {% if yukleme_hatasi %}
@@ -289,19 +251,18 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
             <table class="table table-hover table-bordered align-middle text-center compact-table" id="veriTablosu">
               <thead>
                 <tr>
-                  {% for idx, kol in enumerate(kolonlar) %}
-                    <th onclick="{% if 'Tarih' in kol %}tarihFiltreAc({{idx}}){% else %}void(0);{% endif %}">
+                  {% for kol in kolonlar %}
+                    <th onclick="{% if 'Tarih' in kol %}tarihFiltreAc({{ loop.index0 }}){% else %}void(0);{% endif %}">
                       {{kol}}
                       {% if 'Tarih' in kol %}
                         <span style="font-size:0.85em; color:#ffb100;">&#128197;</span>
-                        <!-- Tarih filtresi paneli -->
-                        <div id="tarihFiltrePanel{{idx}}" style="display:none; position:absolute; z-index:20; background:white; border:1px solid #ccc; padding:12px; border-radius:8px;">
+                        <div id="tarihFiltrePanel{{loop.index0}}" style="display:none; position:absolute; z-index:20; background:white; border:1px solid #ccc; padding:12px; border-radius:8px;">
                           <label>Başlangıç:</label>
-                          <input type="text" id="tarihBaslangic{{idx}}" class="form-control mb-2" placeholder="Başlangıç">
+                          <input type="text" id="tarihBaslangic{{loop.index0}}" class="form-control mb-2" placeholder="Başlangıç">
                           <label>Bitiş:</label>
-                          <input type="text" id="tarihBitis{{idx}}" class="form-control mb-2" placeholder="Bitiş">
-                          <button onclick="tarihAraligiFiltrele({{idx}});" class="btn btn-primary btn-sm mb-1">Filtrele</button>
-                          <button onclick="tarihFiltreKapat({{idx}});" class="btn btn-outline-secondary btn-sm">Temizle</button>
+                          <input type="text" id="tarihBitis{{loop.index0}}" class="form-control mb-2" placeholder="Bitiş">
+                          <button onclick="tarihAraligiFiltrele({{loop.index0}});" class="btn btn-primary btn-sm mb-1">Filtrele</button>
+                          <button onclick="tarihFiltreKapat({{loop.index0}});" class="btn btn-outline-secondary btn-sm">Temizle</button>
                         </div>
                       {% endif %}
                     </th>
