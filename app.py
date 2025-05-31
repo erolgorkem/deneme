@@ -6,7 +6,7 @@ from flask import Flask, request, render_template_string, redirect, url_for, ses
 app = Flask(__name__)
 app.secret_key = 'gorkem-bey-ozel-sifre'
 
-# Mutlaka app.py ile aynı klasöre .db dosyasını at
+# Veritabanı dosyası, app.py ile aynı klasörde olur:
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE = os.path.join(BASE_DIR, "data.db")
 
@@ -32,18 +32,16 @@ def get_db():
 def init_db():
     db = get_db()
     c = db.cursor()
-    # Siparişler tablosu
     c.execute(f"""
         CREATE TABLE IF NOT EXISTS siparisler (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            {" TEXT, ".join([k.replace(" ", "_") for k in SIPARIS_KOLONLAR])} TEXT
+            {", ".join([f"{k.replace(' ', '_')} TEXT" for k in SIPARIS_KOLONLAR])}
         )
     """)
-    # Maliyet tablosu
     c.execute(f"""
         CREATE TABLE IF NOT EXISTS maliyetler (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            {" TEXT, ".join([k.replace(" ", "_") for k in MALIYET_KOLONLAR])} TEXT
+            {", ".join([f"{k.replace(' ', '_')} TEXT" for k in MALIYET_KOLONLAR])}
         )
     """)
     db.commit()
@@ -281,7 +279,7 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
     </html>
     """, tablo_df=tablo_df, kolonlar=kolonlar, aktif_tab=aktif_tab, yukleme_hatasi=yukleme_hatasi)
 
-# TABLO OLUŞTURMA GARANTİSİ: Render/gunicorn/main her türlü çalıştırmada tablo oluşur!
+# Tabloları her platformda otomatik kur!
 with app.app_context():
     init_db()
 
