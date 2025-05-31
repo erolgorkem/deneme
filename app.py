@@ -1,15 +1,12 @@
 import os
 import pandas as pd
-from flask import Flask, request, render_template_string, redirect, url_for, session
+import sqlite3
+from flask import Flask, request, render_template_string, redirect, url_for, session, g
 
 app = Flask(__name__)
 app.secret_key = 'gorkem-bey-ozel-sifre'
 
-SIPARIS_UPLOAD = 'uploads_siparis'
-MALIYET_UPLOAD = 'uploads_maliyet'
-for folder in [SIPARIS_UPLOAD, MALIYET_UPLOAD]:
-    if not os.path.exists(folder):
-        os.makedirs(folder)
+DATABASE = "data.db"
 
 SIPARIS_KOLONLAR = [
     "Sipariş Statüsü", "Sipariş Tarihi", "Teslim Tarihi", "Sipariş Numarası", "Barkod",
@@ -24,20 +21,40 @@ MALIYET_KOLONLAR = [
 KULLANICI_ADI = "admin"
 SIFRE = "bilmiyorum"
 
-siparis_df = None
-maliyet_df = None
+def get_db():
+    db = getattr(g, '_database', None)
+    if db is None:
+        db = g._database = sqlite3.connect(DATABASE)
+    return db
 
-def giris_gerekli(f):
-    from functools import wraps
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        if not session.get('giris'):
-            return redirect(url_for('login'))
-        return f(*args, **kwargs)
-    return wrapper
+def init_db():
+    with app.app_context():
+        db = get_db()
+        c = db.cursor()
+        # Siparişler tablosu
+        c.execute(f"""
+            CREATE TABLE IF NOT EXISTS siparisler (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {" TEXT, ".join([k.replace(" ", "_") for k in SIPARIS_KOLONLAR])} TEXT
+            )
+        """)
+        # Maliyet tablosu
+        c.execute(f"""
+            CREATE TABLE IF NOT EXISTS maliyetler (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                {" TEXT, ".join([k.replace(" ", "_") for k in MALIYET_KOLONLAR])} TEXT
+            )
+        """)
+        db.commit()
+
+@app.teardown_appcontext
+def close_connection(exception):
+    db = getattr(g, '_database', None)
+    if db is not None:
+        db.close()
 
 def kolon_eslestir(df, aranan_kolonlar):
-    # Küçük harfe, boşluğa, noktalama işaretine duyarsız başlık eşleştirme
+    # Kolon başlıklarını normalize ederek eşleştir
     temiz = lambda s: ''.join(str(s).lower().replace(' ', '').replace('\n','').replace('-','').replace('(','').replace(')','').replace('_',''))
     df_cols = {temiz(col):col for col in df.columns}
     sonuclar = []
@@ -91,73 +108,107 @@ def logout():
     return redirect(url_for('login'))
 
 @app.route('/')
-@giris_gerekli
 def index():
+    if not session.get('giris'):
+        return redirect(url_for('login'))
     return redirect(url_for('siparis'))
 
 @app.route('/siparis', methods=['GET', 'POST'])
-@giris_gerekli
 def siparis():
-    global siparis_df
+    if not session.get('giris'):
+        return redirect(url_for('login'))
     hata = None
     if request.method == 'POST':
         file = request.files['file']
         if file and file.filename.endswith(('.xls', '.xlsx')):
-            filepath = os.path.join(SIPARIS_UPLOAD, file.filename)
-            file.save(filepath)
             try:
-                df = pd.read_excel(filepath)
+                df = pd.read_excel(file)
                 eslesen_kolonlar = kolon_eslestir(df, SIPARIS_KOLONLAR)
-                # Kolon sırası bozulmadan ve eksikler None olacak şekilde DataFrame oluştur
-                siparis_df = pd.DataFrame()
-                for hedef, kaynak in zip(SIPARIS_KOLONLAR, eslesen_kolonlar):
-                    if kaynak:
-                        siparis_df[hedef] = df[kaynak]
-                    else:
-                        siparis_df[hedef] = ""
-                # Tarih kolonlarını biçimlendir
+                # Sil ve yeniden ekle
+                db = get_db()
+                db.execute("DELETE FROM siparisler")
+                # Tarih formatı
                 for kol in ["Sipariş Tarihi", "Teslim Tarihi"]:
-                    if kol in siparis_df.columns:
-                        siparis_df[kol] = pd.to_datetime(siparis_df[kol], errors='coerce').dt.strftime('%Y-%m-%d')
+                    idx = SIPARIS_KOLONLAR.index(kol) if kol in SIPARIS_KOLONLAR else -1
+                    if idx >= 0 and eslesen_kolonlar[idx]:
+                        df[eslesen_kolonlar[idx]] = pd.to_datetime(df[eslesen_kolonlar[idx]], errors='coerce').dt.strftime('%Y-%m-%d')
+                for _, row in df.iterrows():
+                    values = []
+                    for hedef, kaynak in zip(SIPARIS_KOLONLAR, eslesen_kolonlar):
+                        values.append(str(row[kaynak]) if kaynak else "")
+                    db.execute(f"INSERT INTO siparisler ({', '.join([k.replace(' ','_') for k in SIPARIS_KOLONLAR])}) VALUES ({','.join(['?']*len(SIPARIS_KOLONLAR))})", values)
+                db.commit()
             except Exception as e:
                 hata = f"Excel kolonlarında eksik veya hatalı başlık var: {str(e)}"
+    # Filtreleme (arama ve tarih aralığı)
+    arama = request.args.get('arama', '').lower()
+    tarih_kolon = request.args.get('tarih_kolon')
+    tarih1 = request.args.get('tarih1')
+    tarih2 = request.args.get('tarih2')
+    query = f"SELECT {', '.join([k.replace(' ','_') for k in SIPARIS_KOLONLAR])} FROM siparisler"
+    params = []
+    filters = []
+    if arama:
+        for kol in SIPARIS_KOLONLAR:
+            filters.append(f"LOWER({kol.replace(' ','_')}) LIKE ?")
+            params.append(f"%{arama}%")
+        query += " WHERE (" + " OR ".join(filters) + ")"
+    if tarih_kolon and tarih1 and tarih2 and tarih_kolon in SIPARIS_KOLONLAR:
+        field = tarih_kolon.replace(' ','_')
+        clause = f"{field} BETWEEN ? AND ?"
+        params = [tarih1, tarih2]
+        query = f"SELECT {', '.join([k.replace(' ','_') for k in SIPARIS_KOLONLAR])} FROM siparisler WHERE {clause}"
+    db = get_db()
+    rows = db.execute(query, params).fetchall()
+    tablo_df = pd.DataFrame(rows, columns=SIPARIS_KOLONLAR) if rows else None
     return render_sablon(
         aktif_tab="siparis",
-        tablo_df=siparis_df,
+        tablo_df=tablo_df,
         kolonlar=SIPARIS_KOLONLAR,
         yukleme_hatasi=hata
     )
 
 @app.route('/maliyet', methods=['GET', 'POST'])
-@giris_gerekli
 def maliyet():
-    global maliyet_df
+    if not session.get('giris'):
+        return redirect(url_for('login'))
     hata = None
     if request.method == 'POST':
         file = request.files['file']
         if file and file.filename.endswith(('.xls', '.xlsx')):
-            filepath = os.path.join(MALIYET_UPLOAD, file.filename)
-            file.save(filepath)
             try:
-                df = pd.read_excel(filepath)
+                df = pd.read_excel(file)
                 eslesen_kolonlar = kolon_eslestir(df, MALIYET_KOLONLAR)
-                maliyet_df = pd.DataFrame()
-                for hedef, kaynak in zip(MALIYET_KOLONLAR, eslesen_kolonlar):
-                    if kaynak:
-                        maliyet_df[hedef] = df[kaynak]
-                    else:
-                        maliyet_df[hedef] = ""
+                db = get_db()
+                db.execute("DELETE FROM maliyetler")
+                for _, row in df.iterrows():
+                    values = []
+                    for hedef, kaynak in zip(MALIYET_KOLONLAR, eslesen_kolonlar):
+                        values.append(str(row[kaynak]) if kaynak else "")
+                    db.execute(f"INSERT INTO maliyetler ({', '.join([k.replace(' ','_') for k in MALIYET_KOLONLAR])}) VALUES ({','.join(['?']*len(MALIYET_KOLONLAR))})", values)
+                db.commit()
             except Exception as e:
                 hata = f"Excel kolonlarında eksik veya hatalı başlık var: {str(e)}"
+    arama = request.args.get('arama', '').lower()
+    query = f"SELECT {', '.join([k.replace(' ','_') for k in MALIYET_KOLONLAR])} FROM maliyetler"
+    params = []
+    if arama:
+        filters = []
+        for kol in MALIYET_KOLONLAR:
+            filters.append(f"LOWER({kol.replace(' ','_')}) LIKE ?")
+            params.append(f"%{arama}%")
+        query += " WHERE " + " OR ".join(filters)
+    db = get_db()
+    rows = db.execute(query, params).fetchall()
+    tablo_df = pd.DataFrame(rows, columns=MALIYET_KOLONLAR) if rows else None
     return render_sablon(
         aktif_tab="maliyet",
-        tablo_df=maliyet_df,
+        tablo_df=tablo_df,
         kolonlar=MALIYET_KOLONLAR,
         yukleme_hatasi=hata
     )
 
 def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
-    tarih_kolonlari = [k for k in kolonlar if "Tarih" in k]
     return render_template_string("""
     <!DOCTYPE html>
     <html>
@@ -165,7 +216,6 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
       <title>Excel Paneli</title>
       <meta charset="utf-8">
       <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-      <link href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css" rel="stylesheet">
       <style>
         body { background-color: #f4f6f8; }
         .container { margin-top: 30px; max-width: 99vw; }
@@ -184,7 +234,6 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
         .yukle-kart {max-width:450px; margin:auto; margin-bottom:15px;}
         .gizli {display:none;}
       </style>
-      <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
       <script>
         function filtreleTablo() {
           var input = document.getElementById("aramaInput");
@@ -201,37 +250,6 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
             }
             tr[i].style.display = satirGoster ? "" : "none";
           }
-        }
-        function tarihAraligiFiltrele(kolonIndex) {
-          var tablo = document.getElementById("veriTablosu");
-          var baslangic = document.getElementById("tarihBaslangic" + kolonIndex).value;
-          var bitis = document.getElementById("tarihBitis" + kolonIndex).value;
-          var tr = tablo ? tablo.getElementsByTagName("tr") : [];
-          for (var i = 1; i < tr.length; i++) {
-            var td = tr[i].getElementsByTagName("td")[kolonIndex];
-            if (!td) continue;
-            var deger = td.textContent.trim();
-            if (baslangic && bitis && deger) {
-              if (deger >= baslangic && deger <= bitis) {
-                tr[i].style.display = "";
-              } else {
-                tr[i].style.display = "none";
-              }
-            } else {
-              tr[i].style.display = "";
-            }
-          }
-        }
-        function tarihFiltreAc(kolonIndex) {
-          document.getElementById("tarihFiltrePanel" + kolonIndex).style.display = "block";
-          flatpickr("#tarihBaslangic" + kolonIndex, {dateFormat: "Y-m-d"});
-          flatpickr("#tarihBitis" + kolonIndex, {dateFormat: "Y-m-d"});
-        }
-        function tarihFiltreKapat(kolonIndex) {
-          document.getElementById("tarihFiltrePanel" + kolonIndex).style.display = "none";
-          document.getElementById("tarihBaslangic" + kolonIndex).value = "";
-          document.getElementById("tarihBitis" + kolonIndex).value = "";
-          tarihAraligiFiltrele(kolonIndex);
         }
       </script>
     </head>
@@ -271,20 +289,7 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
               <thead>
                 <tr>
                   {% for kol in kolonlar %}
-                    <th onclick="{% if 'Tarih' in kol %}tarihFiltreAc({{ loop.index0 }}){% else %}void(0);{% endif %}">
-                      {{kol}}
-                      {% if 'Tarih' in kol %}
-                        <span style="font-size:0.85em; color:#ffb100;">&#128197;</span>
-                        <div id="tarihFiltrePanel{{loop.index0}}" style="display:none; position:absolute; z-index:20; background:white; border:1px solid #ccc; padding:12px; border-radius:8px;">
-                          <label>Başlangıç:</label>
-                          <input type="text" id="tarihBaslangic{{loop.index0}}" class="form-control mb-2" placeholder="Başlangıç">
-                          <label>Bitiş:</label>
-                          <input type="text" id="tarihBitis{{loop.index0}}" class="form-control mb-2" placeholder="Bitiş">
-                          <button onclick="tarihAraligiFiltrele({{loop.index0}});" class="btn btn-primary btn-sm mb-1">Filtrele</button>
-                          <button onclick="tarihFiltreKapat({{loop.index0}});" class="btn btn-outline-secondary btn-sm">Temizle</button>
-                        </div>
-                      {% endif %}
-                    </th>
+                    <th>{{kol}}</th>
                   {% endfor %}
                 </tr>
               </thead>
@@ -306,4 +311,5 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
     """, tablo_df=tablo_df, kolonlar=kolonlar, aktif_tab=aktif_tab, yukleme_hatasi=yukleme_hatasi)
 
 if __name__ == '__main__':
+    init_db()
     app.run(debug=True)
