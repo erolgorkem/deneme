@@ -3,7 +3,7 @@ import pandas as pd
 from flask import Flask, request, render_template_string, redirect, url_for, session
 
 app = Flask(__name__)
-app.secret_key = 'gorkem-bey-ozel-sifre'  # Güvenli, rastgele bir secret key kullan, örnek için böyle.
+app.secret_key = 'gorkem-bey-ozel-sifre'
 
 dataframe = None
 
@@ -12,28 +12,28 @@ if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-# Sadece bu kolonlar gelsin!
+# Kolonlar ve sırası senin verdiğin gibi:
 ISTENEN_KOLONLAR = [
-    "Barkod",
-    "Paket No",
-    "Kargo Firması",
-    "Sipariş Tarihi",
-    "Kargo Kodu",
-    "Sipariş Numarası",
-    "Alıcı",
-    "Teslimat Adresi",
-    "İl",
-    "İlçe",
-    "Ürün Adı",
     "Sipariş Statüsü",
-    "Komisyon Oranı",
+    "Sipariş Tarihi",
+    "Teslim Tarihi",
+    "Sipariş Numarası",
+    "Barkod",
     "Stok Kodu",
     "Adet",
+    "Alıcı",
+    "Paket No",
+    "Kargo Firması",
+    "Kargo Kodu",
+    "Ürün Adı",
     "Birim Fiyatı",
     "Satış Tutarı",
     "İndirim Tutarı",
     "Faturalanacak Tutar",
-    "Teslim Tarihi"
+    "Komisyon Oranı",
+    "Teslimat Adresi",
+    "İl",
+    "İlçe"
 ]
 
 KULLANICI_ADI = "admin"
@@ -145,8 +145,13 @@ def show_table():
     global dataframe
     if dataframe is None:
         return "Henüz bir dosya yüklenmedi.", 404
-    # Fontları küçült, padding'i azalt, tabloyu sıkıştır
-    html_table = dataframe.to_html(classes='table table-hover table-bordered align-middle text-center compact-table', index=False)
+
+    html_table = dataframe.to_html(
+        classes='table table-hover table-bordered align-middle text-center compact-table',
+        index=False,
+        table_id='veriTablosu'
+    )
+
     return render_template_string("""
     <!DOCTYPE html>
     <html>
@@ -172,7 +177,27 @@ def show_table():
         th { background: #007bff; color: #fff; }
         td, th { vertical-align: middle !important; }
         .table-responsive { max-height: 70vh; overflow-x: auto; }
+        .arama-kutusu { margin-bottom: 14px; max-width: 350px;}
       </style>
+      <script>
+        function filtreleTablo() {
+          var input = document.getElementById("aramaInput");
+          var filtre = input.value.toLowerCase();
+          var tablo = document.getElementById("veriTablosu");
+          var tr = tablo.getElementsByTagName("tr");
+          for (var i = 1; i < tr.length; i++) {
+            var tds = tr[i].getElementsByTagName("td");
+            var satirGoster = false;
+            for (var j = 0; j < tds.length; j++) {
+              if (tds[j].textContent.toLowerCase().indexOf(filtre) > -1) {
+                satirGoster = true;
+                break;
+              }
+            }
+            tr[i].style.display = satirGoster ? "" : "none";
+          }
+        }
+      </script>
     </head>
     <body>
       <div class="container-fluid">
@@ -180,6 +205,7 @@ def show_table():
             <a href="/logout" class="btn btn-outline-danger">Çıkış Yap</a>
         </div>
         <h2 class="text-primary">Yüklenen Excel Tablosu</h2>
+        <input type="text" id="aramaInput" class="form-control arama-kutusu" placeholder="Tabloda ara..." onkeyup="filtreleTablo()">
         <div class="table-responsive shadow rounded-4">
           {{ table|safe }}
         </div>
