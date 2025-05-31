@@ -28,24 +28,23 @@ def get_db():
     return db
 
 def init_db():
-    with app.app_context():
-        db = get_db()
-        c = db.cursor()
-        # Siparişler tablosu
-        c.execute(f"""
-            CREATE TABLE IF NOT EXISTS siparisler (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                {" TEXT, ".join([k.replace(" ", "_") for k in SIPARIS_KOLONLAR])} TEXT
-            )
-        """)
-        # Maliyet tablosu
-        c.execute(f"""
-            CREATE TABLE IF NOT EXISTS maliyetler (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                {" TEXT, ".join([k.replace(" ", "_") for k in MALIYET_KOLONLAR])} TEXT
-            )
-        """)
-        db.commit()
+    db = get_db()
+    c = db.cursor()
+    # Siparişler tablosu
+    c.execute(f"""
+        CREATE TABLE IF NOT EXISTS siparisler (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            {" TEXT, ".join([k.replace(" ", "_") for k in SIPARIS_KOLONLAR])} TEXT
+        )
+    """)
+    # Maliyet tablosu
+    c.execute(f"""
+        CREATE TABLE IF NOT EXISTS maliyetler (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            {" TEXT, ".join([k.replace(" ", "_") for k in MALIYET_KOLONLAR])} TEXT
+        )
+    """)
+    db.commit()
 
 @app.teardown_appcontext
 def close_connection(exception):
@@ -54,7 +53,6 @@ def close_connection(exception):
         db.close()
 
 def kolon_eslestir(df, aranan_kolonlar):
-    # Kolon başlıklarını normalize ederek eşleştir
     temiz = lambda s: ''.join(str(s).lower().replace(' ', '').replace('\n','').replace('-','').replace('(','').replace(')','').replace('_',''))
     df_cols = {temiz(col):col for col in df.columns}
     sonuclar = []
@@ -124,10 +122,8 @@ def siparis():
             try:
                 df = pd.read_excel(file)
                 eslesen_kolonlar = kolon_eslestir(df, SIPARIS_KOLONLAR)
-                # Sil ve yeniden ekle
                 db = get_db()
                 db.execute("DELETE FROM siparisler")
-                # Tarih formatı
                 for kol in ["Sipariş Tarihi", "Teslim Tarihi"]:
                     idx = SIPARIS_KOLONLAR.index(kol) if kol in SIPARIS_KOLONLAR else -1
                     if idx >= 0 and eslesen_kolonlar[idx]:
@@ -140,26 +136,8 @@ def siparis():
                 db.commit()
             except Exception as e:
                 hata = f"Excel kolonlarında eksik veya hatalı başlık var: {str(e)}"
-    # Filtreleme (arama ve tarih aralığı)
-    arama = request.args.get('arama', '').lower()
-    tarih_kolon = request.args.get('tarih_kolon')
-    tarih1 = request.args.get('tarih1')
-    tarih2 = request.args.get('tarih2')
-    query = f"SELECT {', '.join([k.replace(' ','_') for k in SIPARIS_KOLONLAR])} FROM siparisler"
-    params = []
-    filters = []
-    if arama:
-        for kol in SIPARIS_KOLONLAR:
-            filters.append(f"LOWER({kol.replace(' ','_')}) LIKE ?")
-            params.append(f"%{arama}%")
-        query += " WHERE (" + " OR ".join(filters) + ")"
-    if tarih_kolon and tarih1 and tarih2 and tarih_kolon in SIPARIS_KOLONLAR:
-        field = tarih_kolon.replace(' ','_')
-        clause = f"{field} BETWEEN ? AND ?"
-        params = [tarih1, tarih2]
-        query = f"SELECT {', '.join([k.replace(' ','_') for k in SIPARIS_KOLONLAR])} FROM siparisler WHERE {clause}"
     db = get_db()
-    rows = db.execute(query, params).fetchall()
+    rows = db.execute(f"SELECT {', '.join([k.replace(' ','_') for k in SIPARIS_KOLONLAR])} FROM siparisler").fetchall()
     tablo_df = pd.DataFrame(rows, columns=SIPARIS_KOLONLAR) if rows else None
     return render_sablon(
         aktif_tab="siparis",
@@ -189,17 +167,8 @@ def maliyet():
                 db.commit()
             except Exception as e:
                 hata = f"Excel kolonlarında eksik veya hatalı başlık var: {str(e)}"
-    arama = request.args.get('arama', '').lower()
-    query = f"SELECT {', '.join([k.replace(' ','_') for k in MALIYET_KOLONLAR])} FROM maliyetler"
-    params = []
-    if arama:
-        filters = []
-        for kol in MALIYET_KOLONLAR:
-            filters.append(f"LOWER({kol.replace(' ','_')}) LIKE ?")
-            params.append(f"%{arama}%")
-        query += " WHERE " + " OR ".join(filters)
     db = get_db()
-    rows = db.execute(query, params).fetchall()
+    rows = db.execute(f"SELECT {', '.join([k.replace(' ','_') for k in MALIYET_KOLONLAR])} FROM maliyetler").fetchall()
     tablo_df = pd.DataFrame(rows, columns=MALIYET_KOLONLAR) if rows else None
     return render_sablon(
         aktif_tab="maliyet",
@@ -311,5 +280,6 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
     """, tablo_df=tablo_df, kolonlar=kolonlar, aktif_tab=aktif_tab, yukleme_hatasi=yukleme_hatasi)
 
 if __name__ == '__main__':
-    init_db()
+    with app.app_context():
+        init_db()
     app.run(debug=True)
