@@ -31,20 +31,10 @@ def get_db():
 def init_db():
     db = get_db()
     c = db.cursor()
-    siparis_sql = (
-        "CREATE TABLE IF NOT EXISTS siparisler ("
-        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-        + ", ".join([f'"{k.replace(" ", "_")}" TEXT' for k in SIPARIS_KOLONLAR]) +
-        ")"
-    )
-    maliyet_sql = (
-        "CREATE TABLE IF NOT EXISTS maliyetler ("
-        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-        + ", ".join([f'"{k.replace(" ", "_")}" TEXT' for k in MALIYET_KOLONLAR]) +
-        ")"
-    )
-    c.execute(siparis_sql)
-    c.execute(maliyet_sql)
+    siparis_fields = ', '.join([f'"{k.replace(" ", "_")}" TEXT' for k in SIPARIS_KOLONLAR])
+    maliyet_fields = ', '.join([f'"{k.replace(" ", "_")}" TEXT' for k in MALIYET_KOLONLAR])
+    c.execute(f'CREATE TABLE IF NOT EXISTS siparisler (id INTEGER PRIMARY KEY AUTOINCREMENT, {siparis_fields})')
+    c.execute(f'CREATE TABLE IF NOT EXISTS maliyetler (id INTEGER PRIMARY KEY AUTOINCREMENT, {maliyet_fields})')
     db.commit()
 
 @app.teardown_appcontext
@@ -117,6 +107,7 @@ def siparis():
     if not session.get('giris'):
         return redirect(url_for('login'))
     hata = None
+    siparis_sql_cols = ', '.join([f'"{k.replace(" ","_")}"' for k in SIPARIS_KOLONLAR])
     if request.method == 'POST':
         file = request.files['file']
         if file and file.filename.endswith(('.xls', '.xlsx')):
@@ -133,14 +124,15 @@ def siparis():
                     values = []
                     for hedef, kaynak in zip(SIPARIS_KOLONLAR, eslesen_kolonlar):
                         values.append(str(row[kaynak]) if kaynak else "")
-                    db.execute(f"INSERT INTO siparisler ({', '.join(['\"' + k.replace(' ','_') + '\"' for k in SIPARIS_KOLONLAR])}) VALUES ({','.join(['?']*len(SIPARIS_KOLONLAR))})", values)
+                    db.execute(
+                        f"INSERT INTO siparisler ({siparis_sql_cols}) VALUES ({','.join(['?']*len(SIPARIS_KOLONLAR))})",
+                        values
+                    )
                 db.commit()
             except Exception as e:
                 hata = f"Excel kolonlarında eksik veya hatalı başlık var: {str(e)}"
     db = get_db()
-    rows = db.execute(
-        f"SELECT {', '.join(['\"' + k.replace(' ','_') + '\"' for k in SIPARIS_KOLONLAR])} FROM siparisler"
-    ).fetchall()
+    rows = db.execute(f"SELECT {siparis_sql_cols} FROM siparisler").fetchall()
     tablo_df = pd.DataFrame(rows, columns=SIPARIS_KOLONLAR) if rows else None
     return render_sablon(
         aktif_tab="siparis",
@@ -154,6 +146,7 @@ def maliyet():
     if not session.get('giris'):
         return redirect(url_for('login'))
     hata = None
+    maliyet_sql_cols = ', '.join([f'"{k.replace(" ","_")}"' for k in MALIYET_KOLONLAR])
     if request.method == 'POST':
         file = request.files['file']
         if file and file.filename.endswith(('.xls', '.xlsx')):
@@ -166,14 +159,15 @@ def maliyet():
                     values = []
                     for hedef, kaynak in zip(MALIYET_KOLONLAR, eslesen_kolonlar):
                         values.append(str(row[kaynak]) if kaynak else "")
-                    db.execute(f"INSERT INTO maliyetler ({', '.join(['\"' + k.replace(' ','_') + '\"' for k in MALIYET_KOLONLAR])}) VALUES ({','.join(['?']*len(MALIYET_KOLONLAR))})", values)
+                    db.execute(
+                        f"INSERT INTO maliyetler ({maliyet_sql_cols}) VALUES ({','.join(['?']*len(MALIYET_KOLONLAR))})",
+                        values
+                    )
                 db.commit()
             except Exception as e:
                 hata = f"Excel kolonlarında eksik veya hatalı başlık var: {str(e)}"
     db = get_db()
-    rows = db.execute(
-        f"SELECT {', '.join(['\"' + k.replace(' ','_') + '\"' for k in MALIYET_KOLONLAR])} FROM maliyetler"
-    ).fetchall()
+    rows = db.execute(f"SELECT {maliyet_sql_cols} FROM maliyetler").fetchall()
     tablo_df = pd.DataFrame(rows, columns=MALIYET_KOLONLAR) if rows else None
     return render_sablon(
         aktif_tab="maliyet",
@@ -284,7 +278,7 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
     </html>
     """, tablo_df=tablo_df, kolonlar=kolonlar, aktif_tab=aktif_tab, yukleme_hatasi=yukleme_hatasi)
 
-# Her ortamda otomatik kur!
+# Tabloları oluştur
 with app.app_context():
     init_db()
 
