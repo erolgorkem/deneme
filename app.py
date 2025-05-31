@@ -6,7 +6,6 @@ from flask import Flask, request, render_template_string, redirect, url_for, ses
 app = Flask(__name__)
 app.secret_key = 'gorkem-bey-ozel-sifre'
 
-# Veritabanı dosyası, app.py ile aynı klasörde olur:
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE = os.path.join(BASE_DIR, "data.db")
 
@@ -32,18 +31,20 @@ def get_db():
 def init_db():
     db = get_db()
     c = db.cursor()
-    c.execute(f"""
-        CREATE TABLE IF NOT EXISTS siparisler (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            {", ".join([f"{k.replace(' ', '_')} TEXT" for k in SIPARIS_KOLONLAR])}
-        )
-    """)
-    c.execute(f"""
-        CREATE TABLE IF NOT EXISTS maliyetler (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            {", ".join([f"{k.replace(' ', '_')} TEXT" for k in MALIYET_KOLONLAR])}
-        )
-    """)
+    siparis_sql = (
+        "CREATE TABLE IF NOT EXISTS siparisler ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        + ", ".join([f"'{k.replace(' ', '_')}' TEXT" for k in SIPARIS_KOLONLAR]) +
+        ")"
+    )
+    maliyet_sql = (
+        "CREATE TABLE IF NOT EXISTS maliyetler ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        + ", ".join([f"'{k.replace(' ', '_')}' TEXT" for k in MALIYET_KOLONLAR]) +
+        ")"
+    )
+    c.execute(siparis_sql)
+    c.execute(maliyet_sql)
     db.commit()
 
 @app.teardown_appcontext
@@ -279,7 +280,7 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
     </html>
     """, tablo_df=tablo_df, kolonlar=kolonlar, aktif_tab=aktif_tab, yukleme_hatasi=yukleme_hatasi)
 
-# Tabloları her platformda otomatik kur!
+# Tabloları her ortamda garantili kur!
 with app.app_context():
     init_db()
 
