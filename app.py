@@ -6,7 +6,9 @@ from flask import Flask, request, render_template_string, redirect, url_for, ses
 app = Flask(__name__)
 app.secret_key = 'gorkem-bey-ozel-sifre'
 
-DATABASE = "data.db"
+# Mutlaka app.py ile aynı klasöre .db dosyasını at
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATABASE = os.path.join(BASE_DIR, "data.db")
 
 SIPARIS_KOLONLAR = [
     "Sipariş Statüsü", "Sipariş Tarihi", "Teslim Tarihi", "Sipariş Numarası", "Barkod",
@@ -279,7 +281,9 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
     </html>
     """, tablo_df=tablo_df, kolonlar=kolonlar, aktif_tab=aktif_tab, yukleme_hatasi=yukleme_hatasi)
 
+# TABLO OLUŞTURMA GARANTİSİ: Render/gunicorn/main her türlü çalıştırmada tablo oluşur!
+with app.app_context():
+    init_db()
+
 if __name__ == '__main__':
-    with app.app_context():
-        init_db()
     app.run(debug=True)
