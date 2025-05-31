@@ -4,12 +4,36 @@ from flask import Flask, request, render_template_string, redirect, url_for
 
 app = Flask(__name__)
 
-dataframe = None  # Global değişken: Yüklenen Excel verisi burada tutulacak
+dataframe = None
 
 UPLOAD_FOLDER = 'uploads'
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# SADECE ŞU KOLONLAR GELSİN:
+ISTENEN_KOLONLAR = [
+    "Barkod",
+    "Paket No",
+    "Kargo Firması",
+    "Sipariş Tarihi",
+    "Kargo Kodu",
+    "Sipariş Numarası",
+    "Alıcı",
+    "Teslimat Adresi",
+    "İl",
+    "İlçe",
+    "Ürün Adı",
+    "Sipariş Statüsü",
+    "Komisyon Oranı",
+    "Stok Kodu",
+    "Adet",
+    "Birim Fiyatı",
+    "Satış Tutarı",
+    "İndirim Tutarı",
+    "Faturalanacak Tutar",
+    "Teslim Tarihi"
+]
 
 @app.route('/', methods=['GET', 'POST'])
 def upload_file():
@@ -19,7 +43,13 @@ def upload_file():
         if file and file.filename.endswith(('.xls', '.xlsx')):
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
             file.save(filepath)
-            dataframe = pd.read_excel(filepath)
+            df = pd.read_excel(filepath)
+            # SADECE SEÇİLEN KOLONLARI AL
+            try:
+                dataframe = df[ISTENEN_KOLONLAR]
+            except KeyError as e:
+                eksik_kolonlar = set(ISTENEN_KOLONLAR) - set(df.columns)
+                return f"Yüklenen Excel'de şu kolon(lar) eksik: {', '.join(eksik_kolonlar)}", 400
             return redirect(url_for('show_table'))
         else:
             return "Yalnızca Excel dosyası yükleyebilirsin.", 400
