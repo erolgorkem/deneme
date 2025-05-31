@@ -1,8 +1,9 @@
 import os
 import pandas as pd
-from flask import Flask, request, render_template_string, redirect, url_for
+from flask import Flask, request, render_template_string, redirect, url_for, session
 
 app = Flask(__name__)
+app.secret_key = 'gorkem-bey-ozel-sifre'  # Güvenli, rastgele bir secret key kullan, örnek için böyle.
 
 dataframe = None
 
@@ -11,7 +12,7 @@ if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-# SADECE ŞU KOLONLAR GELSİN:
+# Sadece bu kolonlar gelsin!
 ISTENEN_KOLONLAR = [
     "Barkod",
     "Paket No",
@@ -35,7 +36,64 @@ ISTENEN_KOLONLAR = [
     "Teslim Tarihi"
 ]
 
+KULLANICI_ADI = "admin"
+SIFRE = "bilmiyorum"
+
+def giris_gerekli(f):
+    from functools import wraps
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not session.get('giris'):
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return wrapper
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    hata = None
+    if request.method == 'POST':
+        kullanici = request.form.get('kullanici')
+        sifre = request.form.get('sifre')
+        if kullanici == KULLANICI_ADI and sifre == SIFRE:
+            session['giris'] = True
+            return redirect(url_for('upload_file'))
+        else:
+            hata = "Kullanıcı adı veya şifre yanlış!"
+    return render_template_string("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Giriş Yap</title>
+            <meta charset="utf-8">
+            <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+            <style>
+                body { background-color: #f4f6f8; }
+                .container { margin-top: 120px; }
+            </style>
+        </head>
+        <body>
+            <div class="container col-md-4 mx-auto text-center">
+                <h2 class="text-primary mb-4">Giriş Yap</h2>
+                <form method="post" class="border rounded-4 p-5 shadow bg-white">
+                    <input type="text" name="kullanici" placeholder="Kullanıcı Adı" class="form-control mb-3" required autofocus>
+                    <input type="password" name="sifre" placeholder="Şifre" class="form-control mb-4" required>
+                    {% if hata %}
+                        <div class="alert alert-danger mb-3">{{ hata }}</div>
+                    {% endif %}
+                    <button type="submit" class="btn btn-success btn-lg rounded-pill px-5">Giriş</button>
+                </form>
+            </div>
+        </body>
+        </html>
+    """, hata=hata)
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
 @app.route('/', methods=['GET', 'POST'])
+@giris_gerekli
 def upload_file():
     global dataframe
     if request.method == 'POST':
@@ -44,7 +102,6 @@ def upload_file():
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
             file.save(filepath)
             df = pd.read_excel(filepath)
-            # SADECE SEÇİLEN KOLONLARI AL
             try:
                 dataframe = df[ISTENEN_KOLONLAR]
             except KeyError as e:
@@ -69,6 +126,9 @@ def upload_file():
         </head>
         <body>
             <div class="container text-center">
+                <div style="position:absolute;top:18px;right:28px;">
+                    <a href="/logout" class="btn btn-outline-danger">Çıkış Yap</a>
+                </div>
                 <h2 class="text-success">Excel Dosyanı Yükle</h2>
                 <form method="post" enctype="multipart/form-data" class="border rounded-4 p-5 shadow bg-white">
                     <input type="file" name="file" accept=".xls,.xlsx" class="form-control mb-4" required>
@@ -80,11 +140,13 @@ def upload_file():
     '''
 
 @app.route('/table')
+@giris_gerekli
 def show_table():
     global dataframe
     if dataframe is None:
         return "Henüz bir dosya yüklenmedi.", 404
-    html_table = dataframe.to_html(classes='table table-hover table-bordered align-middle text-center', index=False)
+    # Fontları küçült, padding'i azalt, tabloyu sıkıştır
+    html_table = dataframe.to_html(classes='table table-hover table-bordered align-middle text-center compact-table', index=False)
     return render_template_string("""
     <!DOCTYPE html>
     <html>
@@ -94,15 +156,29 @@ def show_table():
       <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
       <style>
         body { background-color: #f4f6f8; }
-        .container { margin-top: 40px; }
-        h2 { margin-bottom: 30px; }
-        .table { font-size: 1.05rem; border-radius: 15px; overflow: hidden; }
+        .container { margin-top: 25px; max-width: 99vw; }
+        h2 { margin-bottom: 16px; font-size: 1.4rem; }
+        .compact-table {
+          font-size: 0.90rem;
+        }
+        .compact-table th, .compact-table td {
+          padding-top: 3px !important;
+          padding-bottom: 3px !important;
+          padding-left: 5px !important;
+          padding-right: 5px !important;
+          white-space: nowrap;
+        }
+        .table { border-radius: 12px; overflow: hidden; }
         th { background: #007bff; color: #fff; }
         td, th { vertical-align: middle !important; }
+        .table-responsive { max-height: 70vh; overflow-x: auto; }
       </style>
     </head>
     <body>
-      <div class="container">
+      <div class="container-fluid">
+        <div style="position:absolute;top:18px;right:28px;">
+            <a href="/logout" class="btn btn-outline-danger">Çıkış Yap</a>
+        </div>
         <h2 class="text-primary">Yüklenen Excel Tablosu</h2>
         <div class="table-responsive shadow rounded-4">
           {{ table|safe }}
