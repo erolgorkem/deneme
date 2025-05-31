@@ -1,7 +1,6 @@
 import os
 import pandas as pd
 from flask import Flask, request, render_template_string, redirect, url_for, session
-from datetime import datetime
 
 app = Flask(__name__)
 app.secret_key = 'gorkem-bey-ozel-sifre'
@@ -36,6 +35,16 @@ def giris_gerekli(f):
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return wrapper
+
+def kolon_eslestir(df, aranan_kolonlar):
+    # Küçük harfe, boşluğa, noktalama işaretine duyarsız başlık eşleştirme
+    temiz = lambda s: ''.join(str(s).lower().replace(' ', '').replace('\n','').replace('-','').replace('(','').replace(')','').replace('_',''))
+    df_cols = {temiz(col):col for col in df.columns}
+    sonuclar = []
+    for aranan in aranan_kolonlar:
+        anahtar = temiz(aranan)
+        sonuclar.append(df_cols.get(anahtar, None))
+    return sonuclar
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -96,13 +105,20 @@ def siparis():
         if file and file.filename.endswith(('.xls', '.xlsx')):
             filepath = os.path.join(SIPARIS_UPLOAD, file.filename)
             file.save(filepath)
-            df = pd.read_excel(filepath)
             try:
-                siparis_df = df[SIPARIS_KOLONLAR].copy()
-                # Tarih kolonlarını datetime'a çevir:
+                df = pd.read_excel(filepath)
+                eslesen_kolonlar = kolon_eslestir(df, SIPARIS_KOLONLAR)
+                # Kolon sırası bozulmadan ve eksikler None olacak şekilde DataFrame oluştur
+                siparis_df = pd.DataFrame()
+                for hedef, kaynak in zip(SIPARIS_KOLONLAR, eslesen_kolonlar):
+                    if kaynak:
+                        siparis_df[hedef] = df[kaynak]
+                    else:
+                        siparis_df[hedef] = ""
+                # Tarih kolonlarını biçimlendir
                 for kol in ["Sipariş Tarihi", "Teslim Tarihi"]:
                     if kol in siparis_df.columns:
-                        siparis_df.loc[:, kol] = pd.to_datetime(siparis_df[kol], errors='coerce').dt.strftime('%Y-%m-%d')
+                        siparis_df[kol] = pd.to_datetime(siparis_df[kol], errors='coerce').dt.strftime('%Y-%m-%d')
             except Exception as e:
                 hata = f"Excel kolonlarında eksik veya hatalı başlık var: {str(e)}"
     return render_sablon(
@@ -122,9 +138,15 @@ def maliyet():
         if file and file.filename.endswith(('.xls', '.xlsx')):
             filepath = os.path.join(MALIYET_UPLOAD, file.filename)
             file.save(filepath)
-            df = pd.read_excel(filepath)
             try:
-                maliyet_df = df[MALIYET_KOLONLAR].copy()
+                df = pd.read_excel(filepath)
+                eslesen_kolonlar = kolon_eslestir(df, MALIYET_KOLONLAR)
+                maliyet_df = pd.DataFrame()
+                for hedef, kaynak in zip(MALIYET_KOLONLAR, eslesen_kolonlar):
+                    if kaynak:
+                        maliyet_df[hedef] = df[kaynak]
+                    else:
+                        maliyet_df[hedef] = ""
             except Exception as e:
                 hata = f"Excel kolonlarında eksik veya hatalı başlık var: {str(e)}"
     return render_sablon(
@@ -136,14 +158,6 @@ def maliyet():
 
 def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
     tarih_kolonlari = [k for k in kolonlar if "Tarih" in k]
-    html_table = (
-        tablo_df[kolonlar].to_html(
-            classes='table table-hover table-bordered align-middle text-center compact-table',
-            index=False,
-            table_id='veriTablosu'
-        )
-        if tablo_df is not None else ""
-    )
     return render_template_string("""
     <!DOCTYPE html>
     <html>
@@ -164,9 +178,11 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
         .table { border-radius: 12px; overflow: hidden; }
         th { background: #007bff; color: #fff; cursor: pointer;}
         td, th { vertical-align: middle !important; }
-        .table-responsive { max-height: 70vh; overflow-x: auto; }
-        .arama-kutusu { margin-bottom: 14px; max-width: 350px;}
-        .tabnav { margin-bottom: 18px; }
+        .table-responsive { max-height: 65vh; overflow-x: auto; }
+        .arama-kutusu { margin-bottom: 12px; max-width: 320px;}
+        .tabnav { margin-bottom: 14px; }
+        .yukle-kart {max-width:450px; margin:auto; margin-bottom:15px;}
+        .gizli {display:none;}
       </style>
       <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
       <script>
@@ -232,20 +248,23 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
             <a class="nav-link {% if aktif_tab == 'maliyet' %}active{% endif %}" href="/maliyet">Maliyet Exceli</a>
           </li>
         </ul>
-
-        <h2 class="text-primary">{% if aktif_tab == 'siparis' %}Sipariş Exceli Yükle{% else %}Maliyet Exceli Yükle{% endif %}</h2>
-
-        <form method="post" enctype="multipart/form-data" class="border rounded-4 p-4 shadow bg-white mb-4" style="max-width:500px;">
-          <input type="file" name="file" accept=".xls,.xlsx" class="form-control mb-3" required>
-          <button type="submit" class="btn btn-primary btn-lg rounded-pill px-5">Yükle</button>
-        </form>
-
-        {% if yukleme_hatasi %}
-            <div class="alert alert-danger mb-3">{{ yukleme_hatasi }}</div>
-        {% endif %}
-
-        <input type="text" id="aramaInput" class="form-control arama-kutusu" placeholder="Tabloda ara..." onkeyup="filtreleTablo()">
-
+        <div class="card yukle-kart shadow-sm border-0">
+          <div class="card-body p-3">
+            <h5 class="card-title text-primary mb-3" style="font-size:1.1rem;">
+              {% if aktif_tab == 'siparis' %}Sipariş Exceli Yükle{% else %}Maliyet Exceli Yükle{% endif %}
+            </h5>
+            <form method="post" enctype="multipart/form-data">
+              <input type="file" name="file" accept=".xls,.xlsx" class="form-control form-control-sm mb-2" required>
+              <button type="submit" class="btn btn-primary btn-sm rounded-pill px-4">Yükle</button>
+            </form>
+            {% if yukleme_hatasi %}
+              <div class="alert alert-danger mt-2 mb-0 p-2" style="font-size:0.96em;">{{ yukleme_hatasi }}</div>
+            {% endif %}
+          </div>
+        </div>
+        <div class="mt-3 mb-2 {% if tablo_df is none %}gizli{% endif %}">
+          <input type="text" id="aramaInput" class="form-control arama-kutusu" placeholder="Tabloda ara..." onkeyup="filtreleTablo()">
+        </div>
         <div class="table-responsive shadow rounded-4" style="background:white;">
           {% if tablo_df is not none %}
             <table class="table table-hover table-bordered align-middle text-center compact-table" id="veriTablosu">
