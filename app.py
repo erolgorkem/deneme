@@ -1,7 +1,8 @@
 import os
-import pandas as pd
 import sqlite3
 from flask import Flask, request, render_template_string, redirect, url_for, session, g
+import openpyxl
+from tempfile import NamedTemporaryFile
 
 app = Flask(__name__)
 app.secret_key = 'gorkem-bey-ozel-sifre'
@@ -43,14 +44,15 @@ def close_connection(exception):
     if db is not None:
         db.close()
 
-def kolon_eslestir(df, aranan_kolonlar):
+def kolon_eslestir(headers, aranan_kolonlar):
+    # Excel başlıklarını normalize et ve eşle
     temiz = lambda s: ''.join(str(s).lower().replace(' ', '').replace('\n','').replace('-','').replace('(','').replace(')','').replace('_',''))
-    df_cols = {temiz(col):col for col in df.columns}
-    sonuclar = []
+    header_map = {temiz(col): i for i, col in enumerate(headers)}
+    sonuc = []
     for aranan in aranan_kolonlar:
         anahtar = temiz(aranan)
-        sonuclar.append(df_cols.get(anahtar, None))
-    return sonuclar
+        sonuc.append(header_map.get(anahtar, None))
+    return sonuc
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -102,38 +104,57 @@ def index():
         return redirect(url_for('login'))
     return redirect(url_for('siparis'))
 
+def excel_satir_satir_database(tabloadi, kolonlar, file_storage):
+    # Yüklenen dosyayı RAM'e almadan geçici dosyaya kaydet
+    with NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+        file_storage.save(tmp.name)
+        tmp_path = tmp.name
+    db = get_db()
+    c = db.cursor()
+    # Tabloyu temizle
+    c.execute(f"DELETE FROM {tabloadi}")
+    wb = openpyxl.load_workbook(tmp_path, read_only=True)
+    ws = wb.active
+    # Başlıklar ve kolon eşleşmeleri
+    headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+    kolon_idx = kolon_eslestir(headers, kolonlar)
+    # INSERT cümlesi
+    sql_cols = ', '.join([f'"{k.replace(" ","_")}"' for k in kolonlar])
+    sql_query = f'INSERT INTO {tabloadi} ({sql_cols}) VALUES ({",".join(["?"]*len(kolonlar))})'
+    sayac = 0
+    for row in ws.iter_rows(min_row=2):
+        values = []
+        for idx in kolon_idx:
+            if idx is not None and idx < len(row):
+                val = row[idx].value
+            else:
+                val = ""
+            values.append(str(val) if val is not None else "")
+        c.execute(sql_query, values)
+        sayac += 1
+        if sayac % 100 == 0:
+            db.commit()
+    db.commit()
+    wb.close()
+    os.unlink(tmp_path)
+    return sayac
+
 @app.route('/siparis', methods=['GET', 'POST'])
 def siparis():
     if not session.get('giris'):
         return redirect(url_for('login'))
     hata = None
-    siparis_sql_cols = ', '.join([f'"{k.replace(" ","_")}"' for k in SIPARIS_KOLONLAR])
     if request.method == 'POST':
         file = request.files['file']
         if file and file.filename.endswith(('.xls', '.xlsx')):
             try:
-                df = pd.read_excel(file)
-                eslesen_kolonlar = kolon_eslestir(df, SIPARIS_KOLONLAR)
-                db = get_db()
-                db.execute("DELETE FROM siparisler")
-                for kol in ["Sipariş Tarihi", "Teslim Tarihi"]:
-                    idx = SIPARIS_KOLONLAR.index(kol) if kol in SIPARIS_KOLONLAR else -1
-                    if idx >= 0 and eslesen_kolonlar[idx]:
-                        df[eslesen_kolonlar[idx]] = pd.to_datetime(df[eslesen_kolonlar[idx]], errors='coerce').dt.strftime('%Y-%m-%d')
-                for _, row in df.iterrows():
-                    values = []
-                    for hedef, kaynak in zip(SIPARIS_KOLONLAR, eslesen_kolonlar):
-                        values.append(str(row[kaynak]) if kaynak else "")
-                    db.execute(
-                        f"INSERT INTO siparisler ({siparis_sql_cols}) VALUES ({','.join(['?']*len(SIPARIS_KOLONLAR))})",
-                        values
-                    )
-                db.commit()
+                eklenen = excel_satir_satir_database('siparisler', SIPARIS_KOLONLAR, file)
             except Exception as e:
-                hata = f"Excel kolonlarında eksik veya hatalı başlık var: {str(e)}"
+                hata = f"Excel yüklemede hata: {str(e)}"
     db = get_db()
-    rows = db.execute(f"SELECT {siparis_sql_cols} FROM siparisler").fetchall()
-    tablo_df = pd.DataFrame(rows, columns=SIPARIS_KOLONLAR) if rows else None
+    sql_cols = ', '.join([f'"{k.replace(" ","_")}"' for k in SIPARIS_KOLONLAR])
+    rows = db.execute(f"SELECT {sql_cols} FROM siparisler").fetchall()
+    tablo_df = rows if rows else None
     return render_sablon(
         aktif_tab="siparis",
         tablo_df=tablo_df,
@@ -146,29 +167,17 @@ def maliyet():
     if not session.get('giris'):
         return redirect(url_for('login'))
     hata = None
-    maliyet_sql_cols = ', '.join([f'"{k.replace(" ","_")}"' for k in MALIYET_KOLONLAR])
     if request.method == 'POST':
         file = request.files['file']
         if file and file.filename.endswith(('.xls', '.xlsx')):
             try:
-                df = pd.read_excel(file)
-                eslesen_kolonlar = kolon_eslestir(df, MALIYET_KOLONLAR)
-                db = get_db()
-                db.execute("DELETE FROM maliyetler")
-                for _, row in df.iterrows():
-                    values = []
-                    for hedef, kaynak in zip(MALIYET_KOLONLAR, eslesen_kolonlar):
-                        values.append(str(row[kaynak]) if kaynak else "")
-                    db.execute(
-                        f"INSERT INTO maliyetler ({maliyet_sql_cols}) VALUES ({','.join(['?']*len(MALIYET_KOLONLAR))})",
-                        values
-                    )
-                db.commit()
+                eklenen = excel_satir_satir_database('maliyetler', MALIYET_KOLONLAR, file)
             except Exception as e:
-                hata = f"Excel kolonlarında eksik veya hatalı başlık var: {str(e)}"
+                hata = f"Excel yüklemede hata: {str(e)}"
     db = get_db()
-    rows = db.execute(f"SELECT {maliyet_sql_cols} FROM maliyetler").fetchall()
-    tablo_df = pd.DataFrame(rows, columns=MALIYET_KOLONLAR) if rows else None
+    sql_cols = ', '.join([f'"{k.replace(" ","_")}"' for k in MALIYET_KOLONLAR])
+    rows = db.execute(f"SELECT {sql_cols} FROM maliyetler").fetchall()
+    tablo_df = rows if rows else None
     return render_sablon(
         aktif_tab="maliyet",
         tablo_df=tablo_df,
@@ -262,7 +271,7 @@ def render_sablon(aktif_tab, tablo_df, kolonlar, yukleme_hatasi=None):
                 </tr>
               </thead>
               <tbody>
-                {% for row in tablo_df[kolonlar].itertuples(index=False) %}
+                {% for row in tablo_df %}
                   <tr>
                     {% for value in row %}
                       <td>{{ value }}</td>
